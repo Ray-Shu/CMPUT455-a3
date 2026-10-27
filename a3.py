@@ -370,6 +370,8 @@ class Solver:
 
 CommandMap = Dict[str, Callable[[str], bool]]
 
+RANDOM = "random"
+PROBABILISTIC = "probabilistic"
 
 class CommandInterface:
     def __init__(self) -> None:
@@ -378,6 +380,7 @@ class CommandInterface:
         self.timelimit = DEFAULT_TIMELIMIT  # A2
         # you can add your own initialisation here
         self.num_simulations = 10
+        self.policy_type = RANDOM # policy type starts at random on startup
 
         self.commands: CommandMap = {
             "help": self.cmd_help,
@@ -510,6 +513,7 @@ class CommandInterface:
         # you need to replace this random move by a move from your
         # simulation-based player
         player = self.game.toplay
+        self.solver.prepare(self.game) # precomputes the weight of every move
 
         best_move = moves[0] # default move
         best_score = -1
@@ -518,11 +522,19 @@ class CommandInterface:
             score = 0
             for i in range(self.num_simulations):
                 simulation = self.game.copy() # creates a copy of the game state
-                simulation.play_move(move) # test that move
+                simulation.play_move(move)
 
                 while not simulation.game_over(): # run simulation until game is over
-                    random_move = random.choice(simulation.legal_moves())
-                    simulation.play(random_move)
+                    legal_moves = simulation.legal_moves()
+                    if self.policy_type == RANDOM:
+                        next_move = random.choice(legal_moves)
+                    elif self.policy_type == PROBABILISTIC:
+                        # grabs the gain table, indexes by the current game context [colour][heap_index][heap_size],
+                        # gets all available plays and weights their values to decide the next move.
+                        gain = self.solver.gain[COLORS.index(simulation.toplay)]
+                        weights = [gain[m][len(simulation.heaps[m])] for m in legal_moves]
+                        next_move = random.choices(legal_moves, weights=weights)[0]
+                    simulation.play_move(next_move)
 
                 if simulation.winner() == player: # check for winner to determine the best move
                     score += 1
@@ -536,15 +548,33 @@ class CommandInterface:
         return True
 
     def cmd_simulate(self, args: str) -> bool:
-        """ Runs a random simulation on a copy of the current game. It chooses randomly with uniform distribution from the legal moves and 
-        plays until game is over. Then it prints the winner based on the final scores. All the original state of the game stays the same."""
+        """ 
+        Runs a simulation on a copy of the current game. 
+        
+        There are two simulations:
+            1. Random: It chooses randomly with uniform distribution from the legal moves and plays until game is over.
+            2. Probabilistic: Gets the values for available moves and weights them. Chooses a move depending on that distribution.
+        
+        Then it prints the winner based on the final scores. All the original state of the game stays the same.
+        """
         if self.game is None: # ensures command does not run when a game has not started
             print_error("no game started")
             return False
-        simulation = self.game.copy() # copies current game state
-        while not simulation.game_over(): # plays until game is over
-            simulation.play(random.choice(simulation.legal_moves()))
-        print(simulation.winner()) # print the winner of simulated game
+        simulation = self.game.copy()
+        if self.policy_type == PROBABILISTIC:
+            self.solver.prepare(self.game)
+
+        while not simulation.game_over():
+            legal_moves = simulation.legal_moves()
+            if self.policy_type == RANDOM:
+                next_move = random.choice(legal_moves)
+            elif self.policy_type == PROBABILISTIC:
+                gain = self.solver.gain[COLORS.index(simulation.toplay)]
+                weights = [gain[m][len(simulation.heaps[m])] for m in legal_moves]
+                next_move = random.choices(legal_moves, weights=weights)[0]
+            simulation.play_move(next_move)
+
+        print(simulation.winner()) 
         return True
 
     def cmd_numsimulations(self, args: str) -> bool:
@@ -563,7 +593,16 @@ class CommandInterface:
             return True
 
     def cmd_policy(self, args: str) -> bool:
-        return not_yet()
+        """Sets the playout policy of the player's simulation. The policies are either 'random' or 'probabilistic'."""
+        if args == "random":
+            self.policy_type = RANDOM 
+            return True
+        elif args == "probabilistic":
+            self.policy_type = PROBABILISTIC
+            return True
+        else: 
+            print_error("policy type argument must be either 'random' or 'probabilistic'")
+            return False
 
     def cmd_policymoves(self, args: str) -> bool:
         return not_yet()
